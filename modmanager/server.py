@@ -2,6 +2,7 @@ import hmac
 import json
 import mimetypes
 import os
+import re
 import secrets
 import tempfile
 import urllib.parse
@@ -9,7 +10,8 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from .engine import Engine, MAX_ARCHIVE
-from .nexus import Nexus
+from .nexus import Nexus, parse_mod_url, website_url
+from .desktop import NexusBrowser
 from .rules import RULES
 from .scanner import scan_games
 
@@ -35,6 +37,7 @@ class App:
         self.engine = Engine(state)
         self.nexus = Nexus()
         self.account = None
+        self.browser = NexusBrowser()
         self.token = secrets.token_urlsafe(32)
         self.web = Path(__file__).parent / 'web'
 
@@ -42,7 +45,8 @@ class App:
         e = self.engine
         if method == 'GET' and path == '/api/state':
             return dict(games=e.games(), mods=e.mods(), rules=list(RULES.values()), account=self.account,
-                        platform=os.name, logs=e.logs(), data_path=str(e.state))
+                        platform=os.name, logs=e.logs(), data_path=str(e.state),
+                        embedded_browser=self.browser.embedded, downloads=e.downloads())
         if method == 'POST' and path == '/api/scan':
             roots = data.get('roots', [])
             if not isinstance(roots, list) or not all(isinstance(p, str) for p in roots):
@@ -82,6 +86,39 @@ class App:
             self.nexus.key = ''
             self.account = None
             return {'ok': True}
+        if method == 'POST' and path == '/api/nexus/open':
+            url = data.get('url')
+            if not url:
+                game = e.game(data['game_id']) if data.get('game_id') else None
+                url = f'https://www.nexusmods.com/{game["domain"]}/mods' if game and game.get('domain') else 'https://www.nexusmods.com/'
+            if data.get('external') is True:
+                return self.browser.open(website_url(url), external=True)
+            return self.browser.open(website_url(url))
+        if method == 'POST' and path == '/api/nexus/resolve':
+            url = self.browser.current() if data.get('current') else data.get('url', '')
+            domain, mod_id = parse_mod_url(url)
+            game = e.game(data['game_id'])
+            if game.get('domain') and game['domain'] != domain:
+                raise ValueError(f'此链接属于 {domain}，请先选择对应游戏。')
+            details = self.nexus.mod(domain, mod_id)
+            # Only persist a user-selected unknown mapping after the API confirms the MOD.
+            game = e.bind_domain(game['id'], domain)
+            return {'game': game, 'mod': details, 'url': f'https://www.nexusmods.com/{domain}/mods/{mod_id}'}
+        if method == 'POST' and path == '/api/downloads/pick':
+            selected = self.browser.pick_archive()
+            return {'download': e.register_download(selected, data.get('game_id')) if selected else None}
+        if method == 'POST' and path == '/api/downloads/import':
+            entry = next((d for d in e.downloads() if d['id'] == data['id']), None)
+            if entry is None or not entry['exists']:
+                raise ValueError('下载文件已不存在，请重新选择。')
+            game = e.game(data['game_id'])
+            if entry.get('domain') and entry['domain'] != game['domain']:
+                raise ValueError('此下载文件属于另一款游戏，请选择原游戏。')
+            from .engine import digest
+            if digest(entry['path']) != entry['sha256']:
+                raise ValueError('下载文件已发生变化，请重新选择并校验。')
+            return e.install(data['game_id'], entry['path'],
+                dict({k: entry[k] for k in ('nexus_id', 'file_id', 'version') if entry.get(k) is not None}, name=entry.get('title')), rule_id=data.get('rule_id'))
         if method == 'POST' and path == '/api/nexus/browse':
             game = e.game(data['game_id'])
             return self.nexus.browse(game['domain'], data.get('query', ''), data.get('category', 'trending'))
@@ -96,11 +133,24 @@ class App:
             selected = next((f for f in files if f['file_id'] == file_id), None)
             if not selected:
                 raise ValueError('该文件已被移除，请刷新文件列表。')
-            if not selected.get('file_name', '').lower().endswith('.zip'):
+            download_only = data.get('download_only', False)
+            if not isinstance(download_only, bool):
+                raise ValueError('download_only 必须是布尔值。')
+            if not download_only and not selected.get('file_name', '').lower().endswith('.zip'):
                 raise ValueError('当前仅支持 ZIP 自动部署；7z/RAR 请在本机解压并重新打包为 ZIP。')
+            if not download_only:
+                rule = RULES.get(data.get('rule_id') or game['rule_id'])
+                if not rule or rule['domain'] != game['domain']:
+                    raise ValueError('此游戏尚无安装适配，请选择“仅下载”或在 Nexus 官网下载。')
+            filename = re.sub(r'[^A-Za-z0-9._-]', '_', selected.get('file_name', 'mod.zip'))[-150:]
+            if Path(filename).suffix.lower() not in ('.zip', '.7z', '.rar'):
+                raise ValueError('当前下载管理仅支持 ZIP、7z 或 RAR 压缩包。')
+            folder = e.state / 'downloads'
+            folder.mkdir(exist_ok=True)
+            final = folder / f'{game["domain"]}-{mod_id}-{file_id}-{filename}'
             url = valid_download(self.nexus.download_link(game['domain'], mod_id, file_id))
             opener = urllib.request.build_opener(DownloadRedirect())
-            with tempfile.NamedTemporaryFile(suffix='.zip', dir=e.state, delete=False) as out:
+            with tempfile.NamedTemporaryFile(suffix='.part', dir=folder, delete=False) as out:
                 temp = Path(out.name)
                 try:
                     with opener.open(url, timeout=60) as response:
@@ -111,9 +161,14 @@ class App:
                                 raise ValueError('下载超过 512 MiB 上限。')
                             out.write(chunk)
                     out.close()
-                    mod = e.install(game['id'], temp, dict(name=details['name'], version=selected.get('version', ''),
+                    os.replace(temp, final)
+                    info = dict(title=details['name'], version=selected.get('version', ''), nexus_id=mod_id, file_id=file_id,
+                        domain=game['domain'], source_url=f'https://www.nexusmods.com/{game["domain"]}/mods/{mod_id}')
+                    downloaded = e.register_download(final, game['id'], info)
+                    if download_only:
+                        return {'download': downloaded}
+                    return e.install(game['id'], final, dict(name=details['name'], version=selected.get('version', ''),
                                                         nexus_id=mod_id, file_id=file_id), rule_id=data.get('rule_id'))
-                    return mod
                 finally:
                     out.close()
                     temp.unlink(missing_ok=True)

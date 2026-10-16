@@ -62,13 +62,13 @@ def main():
                 expect(page.locator('.mod-item')).to_have_count(0)
                 for width in (1440,390):
                     page.set_viewport_size({'width':width,'height':900})
-                    for view in ['overview','games','mods','nexus','updates','logs','settings']:
+                    for view in ['overview','games','mods','nexus','downloads','updates','logs','settings']:
                         page.goto(url+'/#'+view)
                         expect(page.locator('h1')).to_be_visible()
                         assert not page.evaluate('document.documentElement.scrollWidth > innerWidth'), (width,view)
                 assert not errors, errors
                 browser.close()
-                print('PASS: real-browser add / import / enable / disable / remove; 7 views at desktop and mobile; no JS errors')
+                print('PASS: real-browser add / import / enable / disable / remove; 8 views at desktop and mobile; no JS errors')
         finally:
             proc.terminate()
             proc.wait(timeout=10)

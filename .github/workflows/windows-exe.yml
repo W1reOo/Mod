@@ -2,12 +2,17 @@ name: Build Windows EXE
 on:
   workflow_dispatch:
   push:
+    branches: [main]
     tags: ['v*']
+concurrency:
+  group: windows-exe-${{ github.ref }}
+  cancel-in-progress: true
 permissions:
   contents: read
 jobs:
   windows-exe:
     runs-on: windows-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

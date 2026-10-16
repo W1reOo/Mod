@@ -10,7 +10,8 @@ import time
 import uuid
 import zipfile
 from pathlib import Path, PurePosixPath
-from .rules import RULES
+from .rules import RULES, known_domain
+from .nexus import Nexus
 
 
 MAX_ARCHIVE = 512 * 1024 * 1024
@@ -64,8 +65,55 @@ class Engine:
             CREATE TABLE IF NOT EXISTS mods(id TEXT PRIMARY KEY, data TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS logs(id INTEGER PRIMARY KEY, time REAL, level TEXT, message TEXT);
             CREATE TABLE IF NOT EXISTS operations(id TEXT PRIMARY KEY);
+            CREATE TABLE IF NOT EXISTS downloads(id TEXT PRIMARY KEY, data TEXT NOT NULL);
         ''')
         self.recover()
+        # Repair existing Celeste records without changing deployment rules or mod files.
+        with self.db:
+            for game in self.games():
+                domain = known_domain(game['name'], game.get('steam_id', ''))
+                if not game.get('domain') and domain:
+                    game['domain'] = domain
+                    game['supported'] = False
+                    self.save('games', game)
+
+    def bind_domain(self, game_id, domain):
+        domain = Nexus.domain(domain)
+        with self.lock:
+            game = self.game(game_id)
+            if game.get('domain') and game['domain'] != domain:
+                raise ValueError(f'此链接属于 {domain}，所选游戏是 {game["domain"]}；请先切换游戏。')
+            if not game.get('domain'):
+                game['domain'] = domain
+                game['supported'] = any(r['domain'] == domain for r in RULES.values())
+                with self.db:
+                    self.save('games', game)
+            return game
+
+    def downloads(self):
+        result = []
+        for entry in self.records('downloads'):
+            entry['exists'] = Path(entry['path']).is_file()
+            entry['imported'] = any(m.get('source_archive') == entry['path'] for m in self.mods())
+            result.append(entry)
+        return sorted(result, key=lambda item: item['created'], reverse=True)
+
+    def register_download(self, path, game_id=None, metadata=None):
+        path = Path(path).expanduser().resolve()
+        if not path.is_file() or path.suffix.lower() not in ('.zip', '.7z', '.rar'):
+            raise ValueError('请选择已下载完成的 ZIP、7z 或 RAR 文件。')
+        if path.stat().st_size > MAX_ARCHIVE:
+            raise ValueError('文件超过 512 MiB 上限。')
+        if game_id:
+            self.game(game_id)
+        with self.lock:
+            entry = dict(metadata or {}, id=hashlib.sha256(str(path).encode()).hexdigest(),
+                path=str(path), name=path.name, size=path.stat().st_size, game_id=game_id,
+                created=time.time(), sha256=digest(path))
+            with self.db:
+                self.save('downloads', entry)
+            self.log(f'文件已加入下载管理：{path.name}')
+            return entry
 
     def log(self, message, level='info'):
         with self.lock, self.db:
@@ -112,8 +160,10 @@ class Engine:
                     raise ValueError('游戏目录不能互相嵌套。')
             rule = RULES[rule_id]
             game = dict(id=uuid.uuid4().hex, name=str(data.get('name') or path.name)[:200], path=str(path),
-                        version=str(data.get('version') or '未知'), version_source=data.get('version_source', '手动登记'),
-                        rule_id=rule_id, domain=rule['domain'], source=data.get('source', '手动'), supported=data.get('supported', True))
+                        version=str(data.get('version') or '未知'), version_source=data.get('version_source', '手动登记'), steam_id=str(data.get('steam_id', '')),
+                        rule_id=rule_id, domain=rule['domain'] or known_domain(str(data.get('name') or path.name), str(data.get('steam_id', ''))), source=data.get('source', '手动'), supported=data.get('supported', True))
+            if game['domain'] and not any(r['domain'] == game['domain'] for r in RULES.values()):
+                game['supported'] = False
             with self.db:
                 self.save('games', game)
             self.log(f'登记游戏：{game["name"]} · {path}')
@@ -136,7 +186,7 @@ class Engine:
                 raise ValueError('未知安装规则。')
             rule = RULES[rule_id]
             if rule['domain'] != game['domain']:
-                raise ValueError('所选安装规则不属于该游戏。')
+                raise ValueError('此游戏尚无匹配的安装规则。可以浏览和下载文件，但不能自动部署；请按作者说明安装。')
             archive = Path(archive).expanduser()
             if not archive.is_file() or archive.stat().st_size > MAX_ARCHIVE:
                 raise ValueError('请选择不超过 512 MiB 的 ZIP 文件。')
@@ -222,7 +272,7 @@ class Engine:
                            version=str(metadata.get('version') or manifest.get('version') or '1.0'), enabled=False,
                            files=files, dependencies=dependencies, conflicts=conflicts,
                            nexus_id=metadata.get('nexus_id'), file_id=metadata.get('file_id'),
-                           domain=game['domain'], created=time.time(), baseline={})
+                           domain=game['domain'], created=time.time(), baseline={}, source_archive=str(archive.resolve()))
                 with self.db:
                     self.save('mods', mod)
                 self.log(f'导入 MOD：{mod["name"]}，{len(files)} 个文件（尚未启用）')

@@ -19,7 +19,7 @@ class Nexus:
             url += '?' + urllib.parse.urlencode(params)
         request = urllib.request.Request(url, headers={
             'apikey': self.key, 'Accept': 'application/json',
-            'User-Agent': 'ModHarbor/0.1.0', 'Application-Name': 'ModHarbor', 'Application-Version': '0.1.0'})
+            'User-Agent': 'ModHarbor/0.2.0', 'Application-Name': 'ModHarbor', 'Application-Version': '0.2.0'})
         try:
             with urllib.request.urlopen(request, timeout=30) as response:
                 return json.load(response)
@@ -61,3 +61,36 @@ class Nexus:
 
     def mod(self, domain, mod_id):
         return self.request(f'/games/{self.domain(domain)}/mods/{int(mod_id)}.json')
+
+
+def parse_mod_url(value):
+    """Parse public Nexus links only; never forward query strings to the API."""
+    parsed = urllib.parse.urlsplit(str(value).strip())
+    if parsed.scheme != 'https' or parsed.hostname not in ('nexusmods.com', 'www.nexusmods.com') or parsed.netloc not in ('nexusmods.com', 'www.nexusmods.com'):
+        raise ValueError('请粘贴 https://www.nexusmods.com/游戏/mods/编号 格式的链接。')
+    match = re.fullmatch(r'/(?:games/)?([a-z0-9][a-z0-9_-]{0,79})/mods/([1-9][0-9]{0,11})/?', parsed.path)
+    if not match:
+        raise ValueError('请打开具体 MOD 详情页，链接应包含 /游戏/mods/编号。')
+    return match.group(1), int(match.group(2))
+
+
+def website_url(value):
+    """Allow only known Nexus website routes as initial browser destinations."""
+    parsed = urllib.parse.urlsplit(str(value).strip())
+    if parsed.scheme != 'https' or parsed.netloc not in ('nexusmods.com', 'www.nexusmods.com'):
+        raise ValueError('只能打开 Nexus Mods 官方 HTTPS 页面。')
+    if parsed.path in ('', '/'):
+        return 'https://www.nexusmods.com/'
+    if parsed.path == '/users/myaccount':
+        return 'https://www.nexusmods.com/users/myaccount?tab=api'
+    if re.fullmatch(r'/[a-z0-9][a-z0-9_-]{0,79}(?:/mods)?/?', parsed.path):
+        return 'https://www.nexusmods.com' + parsed.path
+    domain, mod_id = parse_mod_url(value)
+    params = urllib.parse.parse_qs(parsed.query)
+    allowed = {}
+    if params.get('tab', [''])[0] in ('description', 'files', 'posts', 'bugs'):
+        allowed['tab'] = params['tab'][0]
+    if params.get('file_id', [''])[0].isdigit():
+        allowed['file_id'] = params['file_id'][0]
+    query = '?' + urllib.parse.urlencode(allowed) if allowed else ''
+    return f'https://www.nexusmods.com/{domain}/mods/{mod_id}{query}'

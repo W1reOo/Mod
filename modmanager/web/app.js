@@ -17,13 +17,14 @@ const icons = {
   close:'<path d="m6 6 12 12M18 6 6 18"/>',
   check:'<path d="m5 12 4 4L19 6"/>'
 };
+icons.downloads = icons.download;
 const icon = name => `<svg viewBox="0 0 24 24" aria-hidden="true">${icons[name] || icons.mods}</svg>`;
 const esc = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
 const $ = selector => document.querySelector(selector);
-let state = {games:[], mods:[], rules:[], logs:[], account:null};
+let state = {games:[], mods:[], rules:[], logs:[], account:null, downloads:[], embedded_browser:false};
 let page = 'overview', filterGame = '', modSearch = '', nexusResults = null, updateResults = null;
 let nexusQuery = '', nexusCategory = 'trending', nexusGame = '', busy = false, toastTimer;
-const labels = {overview:'总览',games:'我的游戏',mods:'模组管理',nexus:'探索模组',updates:'更新中心',logs:'活动日志',settings:'设置'};
+const labels = {overview:'总览',games:'我的游戏',mods:'模组管理',nexus:'探索模组',downloads:'下载管理',updates:'更新中心',logs:'活动日志',settings:'设置'};
 async function api(path, data) {
   const response = await fetch('/api/' + path, {method: data === undefined ? 'GET' : 'POST',
     headers: {'Content-Type':'application/json', 'X-ModHarbor-Token':$('meta[name="modharbor-token"]').content},
@@ -94,11 +95,23 @@ function modsView() {
     `<div class="notice info">启用前请关闭游戏，并确认规则适用于该包。文件占用、声明依赖与冲突会自动检查；Nexus 页面中的文字要求仍需人工阅读。禁用会恢复原文件，外部修改会阻止覆盖。</div>`+
     (filtered.length?`<div class="mod-list">${filtered.map(m=>{const game=state.games.find(g=>g.id===m.game_id);return `<article class="mod-item"><div class="mod-icon">${icon('mods')}</div><div class="mod-content"><h3>${esc(m.name)} <span class="badge ${m.enabled?'':'gray'}">${m.enabled?'已启用':'未启用'}</span></h3><div class="meta"><span>${esc(game?.name)}</span><span>v${esc(m.version)}</span><span>${m.files.length} 个文件</span><span>${m.nexus_id?'Nexus #'+esc(m.nexus_id):'本地导入'}</span></div></div><div class="actions">${button('详情','mod-detail','ghost','','data-id="'+m.id+'"')}<button class="switch ${m.enabled?'on':''}" role="switch" aria-checked="${m.enabled}" aria-label="${m.enabled?'禁用':'启用'} ${esc(m.name)}" data-action="toggle" data-id="${m.id}"></button>${button('','remove','ghost danger','trash','data-id="'+m.id+'" aria-label="移除模组"')}</div></article>`;}).join('')}</div>`:empty('还没有符合条件的模组','从 Nexus 选择一个模组，或导入本地 ZIP 安装包。',button('导入本地 ZIP','import','primary','download')));
 }
+function nexusWebsite(modId=null, fileId=null) {
+  const game=state.games.find(g=>g.id===nexusGame);
+  if (!game?.domain) return 'https://www.nexusmods.com/';
+  return `https://www.nexusmods.com/${game.domain}/mods`+(modId?`/${Number(modId)}`:'')+(fileId?`?tab=files&file_id=${Number(fileId)}`:'');
+}
 function nexusView() {
-  return heading('为你的游戏，找到新的灵感。','来自 Nexus Mods 的官方热门、最新发布与最近更新。',button(state.account?'账户已连接':'连接 Nexus',state.account?'go-settings':'connect',state.account?'':'primary','nexus'))+
-    `<div class="toolbar"><select id="nexus-game" aria-label="选择游戏">${gameOptions(nexusGame,'选择游戏')}</select><input class="input search" id="nexus-query" placeholder="筛选列表名称，或输入 MOD ID 精确查询…" value="${esc(nexusQuery)}" aria-label="MOD 名称或 ID"><select id="nexus-category" aria-label="模组列表">${[['trending','热门趋势'],['latest','最新发布'],['updated','最近更新']].map(([v,l])=>`<option value="${v}" ${nexusCategory===v?'selected':''}>${l}</option>`).join('')}</select>${button('检索模组','browse','primary','nexus')}</div>`+
-    `<div class="notice">Nexus 公开 API 不提供全站名称搜索；名称仅筛选当前返回的列表，输入数字可按 MOD ID 查询。自动下载通常需要 Premium；普通用户可从官网下载 ZIP 后导入。请先阅读作者的依赖、适用版本与安装说明。</div>`+
-    (nexusResults===null?empty('你的下一款模组，正在等你发现','选择游戏，连接 Nexus Mods，然后开始检索。',button(state.account?'加载热门模组':'连接 Nexus Mods',state.account?'browse':'connect','primary','nexus'),'nexus'):nexusResults.length?`<div class="grid">${nexusResults.map(m=>`<article class="panel nexus-card"><div class="section-head"><span class="nexus-mark">n</span><span class="badge gray">#${esc(m.mod_id)}</span></div><h3>${esc(m.name)}</h3><p>${esc(m.summary || '作者未提供摘要。')}</p><div class="meta">作者 ${esc(m.author || m.uploaded_by || '未知')}<br>版本 ${esc(m.version)} · 下载 ${Number(m.mod_downloads || 0).toLocaleString()}</div><div class="actions"><a class="link-button" href="https://www.nexusmods.com/${esc(state.games.find(g=>g.id===nexusGame)?.domain)}/mods/${Number(m.mod_id)}" target="_blank" rel="noopener noreferrer">作者页面 ↗</a>${button('查看文件','files','','download',`data-mod="${Number(m.mod_id)}"`)}</div></article>`).join('')}</div>`:empty('未找到匹配的模组','尝试其他筛选词，或输入 Nexus MOD ID。','', 'nexus'));
+  return heading('在这里，直接探索 Nexus。','打开官网浏览，粘贴链接获取模组，下载后回到同一个工作空间管理。',button(state.embedded_browser?'应用内打开 Nexus':'打开 Nexus 官网','open-nexus','primary','nexus')+(state.embedded_browser?button('系统浏览器','open-external','ghost'): '')+button(state.account?'账户已连接':'连接 API',state.account?'go-settings':'connect'))+
+    `<div class="toolbar"><select id="nexus-game" aria-label="选择游戏">${gameOptions(nexusGame,'选择游戏')}</select><input class="input search" id="nexus-query" placeholder="粘贴 Nexus 模组链接 / 输入 MOD ID / 筛选名称…" value="${esc(nexusQuery)}" aria-label="Nexus 模组链接、名称或 ID"><select id="nexus-category" aria-label="模组列表">${[['trending','热门趋势'],['latest','最新发布'],['updated','最近更新']].map(([v,l])=>`<option value="${v}" ${nexusCategory===v?'selected':''}>${l}</option>`).join('')}</select>${button('获取模组','browse','primary','nexus')}</div>`+
+    `<div class="toolbar">${state.embedded_browser?button('读取应用内当前 MOD 页面','read-nexus','','arrow'):''}${button('选择已下载的文件','pick-download','','folder')}${button('查看下载管理','go-downloads','','download')}</div>`+
+    `<div class="notice info">官网浏览不需要 API Key；网页账户登录与 API 连接独立。API 详情与文件查询需要连接 API。粘贴如 https://www.nexusmods.com/celeste/mods/7 可直接识别。普通账户在官网点击 Manual / Slow Download 后，使用“选择已下载的文件”加入管理；Premium 可直接请求 API 下载。游戏的 Nexus 标识与安装规则独立，未适配游戏也能浏览、查询和保存文件。</div>`+
+    (nexusResults===null?empty('直接打开 Nexus，找到你想玩的模组','桌面版使用独立的应用内网页窗口；打开模组页后返回这里读取，或粘贴完整链接。',button('开始浏览 Nexus','open-nexus','primary','nexus'),'nexus'):nexusResults.length?`<div class="grid">${nexusResults.map(m=>`<article class="panel nexus-card"><div class="section-head"><span class="nexus-mark">n</span><span class="badge gray">#${esc(m.mod_id)}</span></div><h3>${esc(m.name)}</h3><p>${esc(m.summary || '作者未提供摘要。')}</p><div class="meta">作者 ${esc(m.author || m.uploaded_by || '未知')}<br>版本 ${esc(m.version)} · 下载 ${Number(m.mod_downloads || 0).toLocaleString()}</div><div class="actions">${button('作者页','open-mod','ghost','',`data-mod="${Number(m.mod_id)}"`)}${button('说明','nexus-detail','ghost','',`data-mod="${Number(m.mod_id)}"`)}${button('查看文件','files','','download',`data-mod="${Number(m.mod_id)}"`)}</div></article>`).join('')}</div>`:empty('未找到匹配的模组','名称只能筛选当前 API 列表；全站搜索可使用应用内 Nexus 官网，或直接粘贴模组链接。',button('打开官网搜索','open-nexus','','nexus'), 'nexus'));
+}
+function downloadsView() {
+  const downloads=state.downloads || [];
+  return heading('从下载，到管理。','保存下载文件，明确选择游戏与安装规则后再部署。',button('选择已下载的文件','pick-download','primary','folder'))+
+    `<div class="notice info">官网浏览窗口下载的文件会通过系统保存对话框保存。完成后点击“选择已下载的文件”，不用手动输入路径。API 下载会自动进入本列表。没有适配规则的包可以保存与查看作者说明，不能自动安装到通用目录。</div>`+
+    (downloads.length?`<div class="mod-list">${downloads.map(d=>{const game=state.games.find(g=>g.id===d.game_id); const supported=game&&state.rules.some(r=>r.domain===game.domain); return `<article class="mod-item"><div class="mod-icon">${icon('download')}</div><div class="mod-content"><h3>${esc(d.title || d.name)} <span class="badge ${d.imported?'':'gray'}">${!d.exists?'文件已移动':d.imported?'已导入':'待处理'}</span></h3><div class="meta"><span>${esc(game?.name || '待选择游戏')}</span><span>${(d.size/1048576).toFixed(1)} MiB</span><span>${esc(d.name)}</span></div><div class="mono path-line" title="${esc(d.path)}">${esc(d.path)}</div></div><div class="actions">${d.source_url?button('作者说明','download-source','ghost','',`data-id="${d.id}"`):''}${button(supported||!game?'选择规则并导入':'尚无安装适配','import-download',d.exists?'':'ghost','',`data-id="${d.id}" ${!d.exists||(!supported&&game)?'disabled':''}`)}</div></article>`;}).join('')}</div>`:empty('下载的模组，会在这里汇合','可以从 Nexus 官网手动下载后选择文件，也可以通过 Premium API 直接下载。',button('去 Nexus 浏览','go-nexus','primary','nexus'),'download'));
 }
 function updatesView() {
   return heading('让好体验，保持新鲜。','检查 Nexus 主文件的新版本；新版先导入缓存，由你确认替换。',button('检查全部更新','check-updates','primary','updates'))+
@@ -107,11 +120,11 @@ function updatesView() {
 }
 function settingsView() {
   return heading('你的工作空间，你的偏好。','本地存储、账户连接与安装规则，一目了然。')+
-    `<div class="settings-grid"><div><section class="panel"><div class="panel-top"><h2>Nexus Mods 连接</h2><span class="badge ${state.account?'':'gray'}">${state.account?'已连接':'未连接'}</span></div><p>在 Nexus 个人账户的 API Keys 页面获取 Personal API Key。密钥仅存于服务内存，退出后需要重新连接。</p><div class="field"><label for="api-key">Personal API Key</label><input type="password" autocomplete="off" class="input" id="api-key" placeholder="粘贴你的 Nexus API Key"><small>不会写入浏览器存储、数据库或日志。</small></div><div class="actions">${button(state.account?'更换连接':'验证并连接','save-key','primary','nexus')}${state.account?button('断开连接','disconnect'):''}<a href="https://www.nexusmods.com/users/myaccount?tab=api" target="_blank" rel="noopener noreferrer" class="link-button">获取 API Key ↗</a></div>${state.account?`<p>当前账户：${esc(state.account.name)} · ${state.account.premium?'Premium（可请求自动下载）':'Standard（可检索，下载请使用官网）'}</p>`:''}</section><section class="panel below"><div class="panel-top"><h2>本地数据与扫描</h2></div><div class="field"><label>管理器数据目录</label><div class="mono">${esc(state.data_path)}</div><small>SQLite 状态、MOD 缓存与原文件备份均保存在这里。不要在模组启用期间删除数据目录。</small></div><div class="field"><label for="extra-roots">附加 Steam 库目录</label><input class="input" id="extra-roots" placeholder="如 D:\SteamLibrary（多个路径用换行分隔）"><small>默认 Steam 路径自动扫描。这里填写库根目录，内含 steamapps 文件夹。</small></div>${button('扫描附加目录','scan-extra','','scan')}</section></div><section class="panel"><div class="panel-top"><h2>支持的安装规则</h2><span class="badge gray">${state.rules.length} 项</span></div>${state.rules.map(r=>`<div class="rule"><h3>${esc(r.name)} <span class="badge gray">${esc(r.mechanism)}</span></h3><p>${esc(r.note)}</p><div class="mono">→ ${esc(r.target)}/</div></div>`).join('')}<p>加载器须先按作者说明安装。不支持执行安装器、动态注入进程、FOMOD、7z/RAR 或自动修改插件加载顺序。</p></section></div>`;
+    `<div class="settings-grid"><div><section class="panel"><div class="panel-top"><h2>Nexus Mods 连接</h2><span class="badge ${state.account?'':'gray'}">${state.account?'已连接':'未连接'}</span></div><p>在 Nexus 个人账户的 API Keys 页面获取 Personal API Key。密钥仅存于服务内存，退出后需要重新连接。</p><div class="field"><label for="api-key">Personal API Key</label><input type="password" autocomplete="off" class="input" id="api-key" placeholder="粘贴你的 Nexus API Key"><small>不会写入浏览器存储、数据库或日志。</small></div><div class="actions">${button(state.account?'更换连接':'验证并连接','save-key','primary','nexus')}${state.account?button('断开连接','disconnect'):''}${button('打开 API Key 页面','open-api-page','ghost')}</div>${state.account?`<p>当前账户：${esc(state.account.name)} · ${state.account.premium?'Premium（可请求自动下载）':'Standard（可检索，下载请使用官网）'}</p>`:''}</section><section class="panel below"><div class="panel-top"><h2>本地数据与扫描</h2></div><div class="field"><label>管理器数据目录</label><div class="mono">${esc(state.data_path)}</div><small>SQLite 状态、MOD 缓存与原文件备份均保存在这里。不要在模组启用期间删除数据目录。</small></div><div class="field"><label for="extra-roots">附加 Steam 库目录</label><input class="input" id="extra-roots" placeholder="如 D:\SteamLibrary（多个路径用换行分隔）"><small>默认 Steam 路径自动扫描。这里填写库根目录，内含 steamapps 文件夹。</small></div>${button('扫描附加目录','scan-extra','','scan')}</section></div><section class="panel"><div class="panel-top"><h2>支持的安装规则</h2><span class="badge gray">${state.rules.length} 项</span></div>${state.rules.map(r=>`<div class="rule"><h3>${esc(r.name)} <span class="badge gray">${esc(r.mechanism)}</span></h3><p>${esc(r.note)}</p><div class="mono">→ ${esc(r.target)}/</div></div>`).join('')}<p>加载器须先按作者说明安装。不支持执行安装器、动态注入进程、FOMOD、7z/RAR 或自动修改插件加载顺序。</p></section></div>`;
 }
 function render() {
   nav();
-  const views = {overview, games:gamesView, mods:modsView, nexus:nexusView, updates:updatesView, settings:settingsView,
+  const views = {overview, games:gamesView, mods:modsView, nexus:nexusView, downloads:downloadsView, updates:updatesView, settings:settingsView,
     logs:()=>heading('每一步，都有迹可循。','最近 200 条扫描、安装、启停与错误记录。',button('刷新日志','refresh','','updates'))+`<section class="panel">${logRows(state.logs,true)}</section>`};
   $('#content').innerHTML = views[page]();
 }
@@ -128,13 +141,25 @@ function importModal() {
 }
 async function filesModal(modId) {
   const data = await api('nexus/files',{game_id:nexusGame,mod_id:modId});
-  showModal('选择 MOD 文件',`<div class="field"><label for="download-rule">此 MOD 的安装机制</label><select id="download-rule">${ruleOptions(nexusGame)}</select></div><div class="notice">下载后仅导入缓存。启用前请在作者页确认游戏版本、加载器与依赖；当前只接受 ZIP 包。</div>${(data.files || []).filter(f=>f.category_id!==6&&f.category_id!==7).map(f=>`<article class="file-option"><h3>${esc(f.name)} <span class="badge gray">${esc(f.category_name || '文件')}</span></h3><p>版本 ${esc(f.version)} · ${(Number(f.size_in_bytes || f.size*1024 || 0)/1048576).toFixed(1)} MiB<br>${esc(f.file_name)}</p>${button(f.file_name?.toLowerCase().endsWith('.zip')?'下载并导入':'仅支持 ZIP','download','primary','download',`data-mod="${Number(modId)}" data-file="${Number(f.file_id)}" ${f.file_name?.toLowerCase().endsWith('.zip')?'':'disabled'}`)}</article>`).join('') || '<p>没有可下载文件。</p>'}`);
+  const rules=ruleOptions(nexusGame);
+  showModal('选择 MOD 文件',`<div class="field"><label for="download-rule">此 MOD 的安装机制</label><select id="download-rule" ${rules?'':'disabled'}>${rules||'<option value="">此游戏尚无安装适配（可仅下载）</option>'}</select></div><div class="notice">${state.account?.premium?'Premium：可通过 API 下载。':'普通账户：点击“官网手动下载”，在官网完成下载后选择本机文件。'} ${rules?'下载并导入仍不会自动启用。':'该游戏可以浏览、查询和下载；暂不自动部署，避免放错目录。'}</div>${(data.files || []).filter(f=>f.category_id!==6&&f.category_id!==7).map(f=>`<article class="file-option"><h3>${esc(f.name)} <span class="badge gray">${esc(f.category_name || '文件')}</span></h3><p>版本 ${esc(f.version)} · ${(Number(f.size_in_bytes || f.size*1024 || 0)/1048576).toFixed(1)} MiB<br>${esc(f.file_name)}</p><div class="actions">${button('官网手动下载','open-file','','nexus',`data-mod="${Number(modId)}" data-file="${Number(f.file_id)}"`)}${state.account?.premium?button(rules&&f.file_name?.toLowerCase().endsWith('.zip')?'下载并导入':'仅下载','download','primary','download',`data-mod="${Number(modId)}" data-file="${Number(f.file_id)}" data-only="${!(rules&&f.file_name?.toLowerCase().endsWith('.zip'))}"`):'<span class="meta">API 自动下载需 Premium</span>'}</div></article>`).join('') || '<p>没有可下载文件。</p>'}`);
+}
+function downloadImportModal(id) {
+  const entry=(state.downloads||[]).find(d=>d.id===id);
+  if (!entry) return;
+  const gameId=entry.game_id || state.games[0]?.id || '';
+  showModal('导入下载文件',`<p>${esc(entry.title || entry.name)}</p><div class="field"><label for="download-import-game">目标游戏</label><select id="download-import-game">${gameOptions(gameId,'选择游戏')}</select></div><div class="field"><label for="download-import-rule">安装规则</label><select id="download-import-rule">${ruleOptions(gameId)||'<option value="">尚无安装适配</option>'}</select></div><div class="notice">导入前检查文件哈希。7z/RAR 和没有适配规则的游戏不能直接部署。下载文件仍会保留。</div>`,button('校验并导入','confirm-download-import','primary','download',`data-id="${id}"`));
 }
 async function action(name, el) {
   if (name.startsWith('go-')) {location.hash=name.slice(3);return;}
   if (name==='close-modal') {$('#modal').close();return;}
   if (name==='add-game') return addGameModal();
   if (name==='import') return importModal();
+  if (name==='import-download') return downloadImportModal(el.dataset.id);
+  if (name==='nexus-detail') {
+    const mod=(nexusResults||[]).find(m=>String(m.mod_id)===el.dataset.mod);
+    return showModal(esc(mod?.name||'作者说明'),`<div class="mod-description">${esc(mod?.description||mod?.summary||'列表没有完整描述，请点击作者页查看安装说明。')}</div>`,button('在 Nexus 查看','open-mod','','nexus',`data-mod="${el.dataset.mod}"`));
+  }
   if (name==='connect') {location.hash='settings'; return;}
   if (name==='manage-game') {filterGame=el.dataset.id;location.hash='mods';return;}
   if (name==='mod-detail') {
@@ -176,18 +201,46 @@ async function action(name, el) {
       await api('nexus/connect',{key});await refresh();toast('已连接 Nexus Mods。密钥只保留至应用退出。');
     }
     else if (name==='disconnect') {await api('nexus/disconnect',{});nexusResults=null;await refresh();toast('已断开连接并清除会话密钥。');}
+    else if (['open-nexus','open-api-page','open-external','open-mod','open-file','download-source'].includes(name)) {
+      let url=name==='open-api-page'?'https://www.nexusmods.com/users/myaccount?tab=api':nexusWebsite(el.dataset.mod,el.dataset.file);
+      if (name==='download-source') url=state.downloads.find(d=>d.id===el.dataset.id)?.source_url;
+      const result=await api('nexus/open',{url,external:name==='open-external'});
+      toast(result.embedded?'已在应用内打开 Nexus。浏览后可返回这里读取当前 MOD 页面。':'已打开系统浏览器；复制 MOD 链接回来即可获取。');
+    }
+    else if (name==='pick-download') {
+      if (!state.embedded_browser) {busy=false;return importModal();}
+      const result=await api('downloads/pick',{game_id:nexusGame||undefined});
+      if(result.download){await refresh();location.hash='downloads';toast('文件已加入下载管理，请确认安装规则。');}
+    }
+    else if (name==='confirm-download-import') {
+      const rule=$('#download-import-rule').value;
+      if(!rule)throw new Error('此游戏尚无安装适配；请保存下载文件并按作者说明安装。');
+      const result=await api('downloads/import',{id:el.dataset.id,game_id:$('#download-import-game').value,rule_id:rule});
+      $('#modal').close();await refresh();location.hash='mods';toast(`已导入 ${result.name}，尚未启用。`);
+    }
+    else if (name==='read-nexus') {
+      if(!nexusGame)throw new Error('请先选择要管理的本地游戏。');
+      const result=await api('nexus/resolve',{current:true,game_id:nexusGame});
+      nexusResults=[result.mod];nexusQuery=result.url;await refresh();toast('已读取当前 Nexus MOD 页面。');
+    }
     else if (name==='browse') {
       if (!state.account) throw new Error('请先在设置中连接 Nexus Mods。');
       nexusGame=$('#nexus-game').value;nexusQuery=$('#nexus-query').value;nexusCategory=$('#nexus-category').value;
       if (!nexusGame) throw new Error('请先添加并选择一个游戏。');
-      toast('正在检索 Nexus Mods…');nexusResults=await api('nexus/browse',{game_id:nexusGame,query:nexusQuery,category:nexusCategory});render();
+      toast('正在获取 Nexus Mods…');
+      if(/^https?:\/\//i.test(nexusQuery.trim())) {
+        const result=await api('nexus/resolve',{game_id:nexusGame,url:nexusQuery});
+        nexusResults=[result.mod];await refresh();
+      } else {nexusResults=await api('nexus/browse',{game_id:nexusGame,query:nexusQuery,category:nexusCategory});render();}
     }
     else if (name==='files') await filesModal(el.dataset.mod);
     else if (name==='download'||name==='download-update') {
       let gameId=nexusGame,modId=el.dataset.mod,fileId=el.dataset.file;
       if (name==='download-update') {const u=updateResults.find(u=>u.id===el.dataset.id);gameId=u.game_id;modId=u.nexus_id;fileId=u.file.file_id;}
       toast('正在下载并校验，请等待完成…');
-      const mod=await api('nexus/download',{game_id:gameId,mod_id:modId,file_id:fileId,rule_id:name==='download'?$('#download-rule').value:state.mods.find(m=>m.id===el.dataset.id)?.rule_id});$('#modal').close();await refresh();location.hash='mods';toast(`已导入 ${mod.name}。如为更新，请先禁用旧版再启用新版。`);
+      const mod=await api('nexus/download',{game_id:gameId,mod_id:modId,file_id:fileId,download_only:name==='download'&&el.dataset.only==='true',rule_id:name==='download'?$('#download-rule').value:state.mods.find(m=>m.id===el.dataset.id)?.rule_id});$('#modal').close();await refresh();
+      if(mod.download){location.hash='downloads';toast('下载完成，文件已保存到下载管理；尚未安装。');}
+      else{location.hash='mods';toast(`已导入 ${mod.name}。如为更新，请先禁用旧版再启用新版。`);}
     }
     else if (name==='check-updates') {
       if (!state.account) throw new Error('请先在设置中连接 Nexus Mods。');
@@ -198,6 +251,7 @@ async function action(name, el) {
 }
 document.addEventListener('click',event=>{const el=event.target.closest('[data-action]');if(el&&!el.disabled)action(el.dataset.action,el).catch(error=>toast(error.message,true));});
 document.addEventListener('change',event=>{
+  if(event.target.id==='download-import-game')$('#download-import-rule').innerHTML=ruleOptions(event.target.value)||'<option value="">尚无安装适配</option>';
   if(event.target.id==='import-game')$('#import-rule').innerHTML=ruleOptions(event.target.value);
   if(event.target.id==='mod-game'){filterGame=event.target.value;render();}
   if(event.target.id==='nexus-game'){nexusGame=event.target.value;nexusResults=null;render();}

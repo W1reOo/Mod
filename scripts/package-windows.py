@@ -34,7 +34,7 @@ def main():
     (output / 'THIRD-PARTY-NOTICES.txt').write_text('\n\n' + ('\n\n' + '='*72 + '\n\n').join(notices), encoding='utf-8')
     checksum = hashlib.sha256(exe.read_bytes()).hexdigest()
     (output / 'SHA256SUMS.txt').write_text(f'{checksum}  ModHarbor.exe\n', encoding='ascii')
-    archive = output / 'ModHarbor-0.1.0-windows-x64.zip'
+    archive = output / 'ModHarbor-0.2.0-windows-x64.zip'
     with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED, compresslevel=9) as bundle:
         for name in ['ModHarbor.exe', 'SHA256SUMS.txt', 'THIRD-PARTY-NOTICES.txt']:
             bundle.write(output / name, name)

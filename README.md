@@ -2,7 +2,7 @@
 
 一个本地优先的跨平台 MOD 管理器。中文界面，Python 3.11+，核心功能仅使用标准库，无需 Node.js、数据库服务或前端构建。可通过浏览器使用，也可选择 pywebview 原生窗口。
 
-这是可运行的首版实现，不是所有游戏通用的自动安装器。对不支持的包格式、安装规则和依赖版本会明确报错。
+当前版本 0.2.0 支持应用内 Nexus 浏览、链接识别、文件选择和下载管理。浏览与下载不受安装规则限制；未适配的包会保留为下载文件，不会猜测安装位置。
 
 ## Windows EXE（直接双击）
 
@@ -10,7 +10,7 @@
 
 系统需具备 .NET Framework 4.8 和 Microsoft Edge WebView2 Runtime，现代 Windows 通常已经安装。缺少 WebView2 时可从 [微软官网](https://developer.microsoft.com/microsoft-edge/webview2/) 安装。运行错误记录于 `%LOCALAPPDATA%/ModHarbor/desktop-error.log`。
 
-本任务已在 Linux 上通过 Wine 使用 Windows CPython 与 Windows PyInstaller 生成真正的 PE x64 GUI 程序；Wine 的核心自检不代表原生 Windows/WebView2 窗口已经实机验证。EXE 尚未进行发行者代码签名。请以交付报告中的验证结果为准。
+Windows 工作流使用 Windows CPython 与 PyInstaller 构建 PE x64 GUI 程序，并执行打包后的资源、本地服务和 MOD 安装恢复自检。原生窗口、真实 Nexus 网页登录与下载仍须在本机验证；这些不属于离线自检范围。EXE 尚未进行发行者代码签名。
 
 在 Windows 上复现构建（构建者需要 Python 3.11，最终用户不需要）：
 
@@ -18,7 +18,7 @@
 .\scripts\build-windows.ps1
 ```
 
-也可以把代码推送到 GitHub 后，在 Actions 手动运行 **Build Windows EXE**，成功后从 **ModHarbor-Windows-x64** 下载构建附件。工作流会运行单元测试、生成单文件程序并执行打包程序自身的资源、HTTP 服务和 WinForms 后端导入检查；它不等同于真实交互式游戏验收。此任务没有推送代码或执行远程工作流。
+推送 `main` 或版本标签后会自动运行 **Build Windows EXE**；也可在 Actions 手动运行。成功后从 **ModHarbor-Windows-x64** 下载构建附件。工作流会运行单元测试、生成单文件程序并执行打包程序自身的资源、HTTP 服务和 WinForms 后端导入检查；它不等同于真实交互式游戏验收。构建附件对应各次工作流的提交，更新应用时请选择最新提交的成功记录。
 
 ## 从源码启动（开发者）
 
@@ -58,10 +58,18 @@ pywebview 需要平台 WebView 运行库：Windows 为 WebView2，macOS 为系�
 1. **我的游戏 → 扫描游戏**：发现 Steam 的默认与附加库、Windows Epic 清单和 GOG 注册表、Linux/macOS Heroic/Legendary 元数据。其他游戏可手动登记。扫描仅读取启动器记录，不遍历整个磁盘。
 2. 确认路径和安装规则。Steam 版本来自 `buildid`，并非游戏营销版本；其他来源读取启动器版本。手动登记支持填写版本。
 3. **设置 → Nexus Mods**：到 [Nexus API Keys](https://www.nexusmods.com/users/myaccount?tab=api) 获取 Personal API Key，在应用中验证连接。密钥仅保存于进程内存，不写磁盘或浏览器存储。
-4. **探索模组**：选择游戏，浏览热门、最新发布、最近更新。名称筛选作用于当前 API 列表；数字按 MOD ID 精确查询。公开 v1 API 没有通用名称搜索接口。
-5. 打开作者页面核对版本与依赖，选择安装机制和 ZIP 文件。自动下载通常需要 Nexus Premium；普通用户可从官网手动下载，然后通过**导入 ZIP**填写本机完整路径。
+4. **探索模组 → 应用内打开 Nexus**：在独立的应用内网页窗口中浏览、使用网站搜索、查看作者说明。官网浏览无需 API Key；网站账户登录与 API 连接独立。进入 MOD 页后可回到主窗口点击**读取应用内当前 MOD 页面**；也可直接粘贴 `https://www.nexusmods.com/celeste/mods/7` 获取详情与文件列表。API 读取需要连接 API Key。未识别游戏的来源标识会在用户选择该游戏并成功读取链接后保存；不同游戏的链接会被拦截。
+5. 普通账户点击**官网手动下载**，在官网选择 **Manual / Slow Download** 并使用系统保存对话框保存；完成后点击**选择已下载的文件**，通过系统文件窗口加入**下载管理**，不用输入路径。Premium 可请求 API 下载并自动加入下载列表；只有已有适配规则的 ZIP 提供“下载并导入”。浏览器开发模式不具备原生窗口和文件选择能力，使用系统浏览器及已有路径导入方式。
 6. 导入只写缓存。关闭游戏后点击启用，确认作者要求，管理器检查依赖和冲突、备份原文件，再部署。禁用会恢复原文件；原本不存在的文件会被移除。
 7. **更新中心**检查 Nexus 主文件的不同版本，下载新版后先禁用旧版，再启用新版。不会自动覆盖配置；多分支和可选文件需核对作者页面。
+
+### Nexus 浏览与安装适配的区别
+
+Celeste 自动识别为 Nexus `celeste`（Steam ID `504230`），旧版空标识记录会在启动时修复。Celeste 现在可查询、浏览和下载，但还没有 Everest 或存档的部署策略；这些文件不会被复制到通用 `Mods` 目录。其他未知游戏也可以通过明确粘贴属于该游戏的 MOD 链接绑定来源。
+
+网站可在主窗口关闭后随应用关闭，远程网页不具备本地管理器的 API 令牌或文件操作桥接。仅在原生桌面模式允许保存下载，不自动执行任何下载文件。若网站限制内嵌浏览器，可点击**系统浏览器**完成官方流程后回到应用选择文件。不使用网页抓取或自动化方式绕过账户、验证码、限速或 Premium 权限。
+
+API 列表仍提供热门、最新发布和最近更新；名称筛选仅作用于该列表，数字按 MOD ID 查询。全站搜索使用官网即可。下载管理支持保存 ZIP、7z、RAR；部署引擎仍只接受 ZIP。
 
 ## 安装规则
 
@@ -120,9 +128,10 @@ python -m unittest discover -s tests -v
 python -m pip install playwright
 python -m playwright install chromium
 python tests/browser_smoke.py
+PYTHONPATH=. python tests/browser_nexus_smoke.py
 ```
 
-已有系统 Chromium 时可设置 `CHROMIUM_PATH`。测试覆盖添加游戏、导入、启用、禁用、移除，以及桌面/手机宽度下全部页面的 JavaScript 错误与布局溢出。
+已有系统 Chromium 时可设置 `CHROMIUM_PATH`。测试覆盖添加游戏、导入、启用、禁用、移除，以及桌面/手机宽度下全部页面的 JavaScript 错误与布局溢出。`browser_nexus_smoke.py` 使用真实浏览器和本地 HTTP 服务，Nexus 响应及原生窗口使用确定性替身，验证链接识别、普通账户官网回退、说明转义、文件选择及下载导入；不宣称连接了真实 Nexus。Windows PowerShell 可先设置 `$env:PYTHONPATH="."` 再运行该脚本。
 
 真实 Nexus API 和下载需要用户自己的有效密钥及账户权限，不纳入离线测试。跨平台 CI 与打包配置见 `.github/workflows/test.yml` 和 `pyproject.toml`。
 
@@ -130,7 +139,8 @@ python tests/browser_smoke.py
 
 - `modmanager/scanner.py`：启动器发现与安装元数据。
 - `modmanager/rules.py`：声明式安装配方。
-- `modmanager/nexus.py`：Nexus v1 API、账户验证、列表、文件与下载链接。
+- `modmanager/nexus.py`：Nexus v1 API、官方链接解析、账户验证、列表、文件与下载链接。
+- `modmanager/desktop.py`：应用内 Nexus 窗口、当前页面读取与原生文件选择。
 - `modmanager/engine.py`：SQLite 状态、清单、依赖、备份与事务。
 - `modmanager/server.py`：仅本机 HTTP 服务、会话令牌、同源与下载策略。
 - `modmanager/web/`：响应式中文界面，无 CDN 依赖。

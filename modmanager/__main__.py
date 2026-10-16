@@ -10,6 +10,7 @@ import threading
 import webbrowser
 from pathlib import Path
 from .server import App, make_server
+from .desktop import NexusBrowser
 
 
 def default_state():
@@ -116,7 +117,12 @@ def main():
                 parser.exit(1, '请先安装桌面依赖：pip install -e ".[desktop]"\n')
             threading.Thread(target=server.serve_forever, daemon=True).start()
             try:
-                webview.create_window('ModHarbor', url, width=1400, height=900, min_size=(960, 640))
+                webview.settings['ALLOW_DOWNLOADS'] = True
+                webview.settings['ALLOW_FILE_URLS'] = False
+                app.browser = NexusBrowser(webview)
+                main_window = webview.create_window('ModHarbor', url, width=1400, height=900, min_size=(960, 640))
+                app.browser.main_window = main_window
+                main_window.events.closed += app.browser.close
                 webview.start(gui='edgechromium' if os.name == 'nt' else None)
             finally:
                 server.shutdown()

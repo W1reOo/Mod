@@ -32,3 +32,16 @@ RULES = {
         "note": "仅用于确认会加载 Mods 目录的游戏；不会自动推断未知游戏的安装机制。",
     },
 }
+
+
+# Source identities are independent of file deployment recipes.
+GAME_SOURCES = {'504230': {'name': 'Celeste', 'domain': 'celeste'}}
+
+
+def known_domain(name, steam_id=''):
+    if steam_id in GAME_SOURCES:
+        return GAME_SOURCES[steam_id]['domain']
+    for source in GAME_SOURCES.values():
+        if name.strip().casefold() == source['name'].casefold():
+            return source['domain']
+    return ''
